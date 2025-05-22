@@ -1,0 +1,59 @@
+from flask import Flask, jsonify
+import psycopg2
+
+app = Flask(__name__)
+
+def connect_db():
+    return psycopg2.connect(
+        user="usr",
+        password="password",
+        host="localhost",
+        port="5432",
+        database="empdb"
+    )
+
+@app.route("/dbproj/top_by_district/", methods=["GET"])
+def top_by_district():
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+
+        cursor.execute("""
+            SELECT s.auth_tag AS student_id,
+                   s.district,
+                   AVG(ar.grade) AS average_grade
+            FROM student s
+            JOIN enrolment e ON s.auth_tag = e.student_auth_tag
+            JOIN academic_record ar ON ar.enrolment_id = e.id
+            GROUP BY s.auth_tag, s.district
+            HAVING AVG(ar.grade) = (
+                SELECT MAX(avg_g) FROM (
+                    SELECT AVG(ar2.grade) AS avg_g
+                    FROM student s2
+                    JOIN enrolment e2 ON s2.auth_tag = e2.student_auth_tag
+                    JOIN academic_record ar2 ON ar2.enrolment_id = e2.id
+                    WHERE s2.district = s.district
+                    GROUP BY s2.auth_tag
+                ) sub
+            )
+            ORDER BY s.district;
+        """)
+
+        results = cursor.fetchall()
+        con.close()
+
+        response = []
+        for row in results:
+            response.append({
+                "student_id": row[0],
+                "district": row[1],
+                "average_grade": float(row[2])
+            })
+
+        return jsonify({"status": 200, "errors": None, "results": response})
+
+    except Exception as e:
+        return jsonify({"status": 500, "errors": str(e), "results": []})
+
+if __name__ == "__main__":
+    app.run(debug=True, port=8080)
