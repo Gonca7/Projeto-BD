@@ -1,0 +1,55 @@
+from flask import Flask, jsonify
+import psycopg2
+
+app = Flask(__name__)
+
+def connect_db():
+    return psycopg2.connect(
+        user="usr",
+        password="password",
+        host="localhost",
+        port="5432",
+        database="empdb"
+    )
+
+@app.route("/dbproj/report", methods=["GET"])
+def monthly_report():
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+
+        cursor.execute("""
+            SELECT DISTINCT ON (month)
+                TO_CHAR(ar.date_evaluated, 'YYYY-MM') AS month,
+                c.code AS course_edition_id,
+                c.name AS course_edition_name,
+                COUNT(*) FILTER (WHERE ar.grade >= 10) AS approved,
+                COUNT(*) AS evaluated
+            FROM academic_record ar
+            JOIN enrolment e ON ar.enrolment_id = e.id
+            JOIN course c ON c.name = ar.course_name
+            WHERE ar.date_evaluated >= CURRENT_DATE - INTERVAL '12 months'
+            GROUP BY month, c.code, c.name
+            ORDER BY month, approved DESC;
+        """)
+
+        results = cursor.fetchall()
+        con.close()
+
+        report = []
+        for row in results:
+            report.append({
+                "month": row[0],
+                "course_edition_id": row[1],
+                "course_edition_name": row[2],
+                "approved": row[3],
+                "evaluated": row[4]
+            })
+
+        return jsonify({"status": 200, "errors": None, "results": report})
+
+    except Exception as e:
+        return jsonify({"status": 500, "errors": str(e), "results": []})
+
+if __name__ == "__main__":
+    app.run(debug=True, port=8080)
