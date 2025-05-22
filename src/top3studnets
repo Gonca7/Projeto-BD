@@ -1,0 +1,47 @@
+from flask import Flask, jsonify
+import psycopg2
+
+app = Flask(__name__)
+
+def connect_db():
+    return psycopg2.connect(
+        user="usr",
+        password="password",
+        host="localhost",
+        port="5432",
+        database="empdb"
+    )
+
+@app.route("/students/top3", methods=["GET"])
+def top3_students():
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+
+        cursor.execute("""
+            SELECT s.auth_tag, s.name, ar.course_name, ar.grade
+            FROM student s
+            JOIN enrolment e ON s.auth_tag = e.student_auth_tag
+            JOIN academic_record ar ON ar.enrolment_id = e.id
+            ORDER BY ar.grade DESC
+            LIMIT 3;
+        """)
+
+        results = cursor.fetchall()
+        con.close()
+
+        return jsonify([
+            {
+                "auth_tag": row[0],
+                "name": row[1],
+                "course_name": row[2],
+                "grade": row[3]
+            }
+            for row in results
+        ])
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(debug=True)
