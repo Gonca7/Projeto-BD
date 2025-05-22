@@ -1,0 +1,53 @@
+from flask import Flask, jsonify
+import psycopg2
+
+app = Flask(__name__)
+
+def connect_db():
+    return psycopg2.connect(
+        user="usr",
+        password="password",
+        host="localhost",
+        port="5432",
+        database="empdb"
+    )
+
+@app.route("/dbproj/delete_details/<int:student_id>", methods=["DELETE"])
+def delete_student(student_id):
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+
+        # 1. Obter enrolment IDs do estudante
+        cursor.execute("SELECT id FROM enrolment WHERE student_auth_tag = %s", (student_id,))
+        enrolments = cursor.fetchall()
+
+        # 2. Remover academic_records associados
+        for enrol_id in enrolments:
+            cursor.execute("DELETE FROM academic_record WHERE enrolment_id = %s", (enrol_id[0],))
+
+        # 3. Remover enrolments
+        cursor.execute("DELETE FROM enrolment WHERE student_auth_tag = %s", (student_id,))
+
+        # 4. Remover financial_records
+        cursor.execute("DELETE FROM financial_record WHERE student_auth_tag = %s", (student_id,))
+
+        # 5. Remover extra_curriculares
+        cursor.execute("DELETE FROM student_extra_curricular WHERE student_auth_tag = %s", (student_id,))
+
+        # 6. Remover student
+        cursor.execute("DELETE FROM student WHERE auth_tag = %s", (student_id,))
+
+        # 7. Remover auth
+        cursor.execute("DELETE FROM auth WHERE tag = %s", (student_id,))
+
+        con.commit()
+        con.close()
+
+        return jsonify({"status": 200, "errors": None})
+
+    except Exception as e:
+        return jsonify({"status": 500, "errors": str(e)})
+
+if __name__ == "__main__":
+    app.run(debug=True, port=8080)
