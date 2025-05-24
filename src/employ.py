@@ -1,213 +1,261 @@
+import flask
+from flask import Flask
+from functools import wraps
 import jwt
-from flask import Flask, request, jsonify
+from datetime import datetime, timedelta
+import logging
 import psycopg2
-import datetime
 
 app = Flask(__name__)
-pkey = "ultra-secured-key"
+JWT_SECRET_KEY = "ultra-secured-key"
 enc = "HS256"
+logger = logging.getLogger()
+status_codes = {
+    'internal server error': 500,
+    'bad request': 400,
+    'unauthorized': 401,
+    'success': 200
+}
+
+def connect_db():
+    conn = psycopg2.connect(
+        user="usr",
+        password="password",
+        host="localhost",
+        port="5432",
+        database="empdb"
+    )
+    conn.set_client_encoding('UTF8')
+    return conn
+
+def generate_token(username, role):
+    try:
+        if role not in ['student', 'instructor', 'staff']:
+            raise ValueError('Invalid role specified.')
+
+        payload = {
+            'exp': datetime.utcnow() + timedelta(hours=1),
+            'iat': datetime.utcnow(),
+            'username': username,
+            'role': role
+        }
+
+        token = jwt.encode(payload, JWT_SECRET_KEY, algorithm='HS256')
+        return token if isinstance(token, str) else token.decode('utf-8')
+    except Exception as e:
+        logger.error(f'Error generating token: {str(e)}')
+        return None
+
+def token_required(role=None):
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            auth_header = flask.request.headers.get('Authorization')
+            token = None
+
+            if auth_header:
+                token_parts = auth_header.split(" ")
+                token = token_parts[1] if len(token_parts) > 1 else token_parts[0]
+
+            if not token:
+                return flask.jsonify({
+                    'status': status_codes['unauthorized'],
+                    'errors': 'Token is missing. Add Authorization: Bearer <token>',
+                    'results': None
+                })
+
+            try:
+                if isinstance(token, bytes):
+                    token = token.decode('utf-8')
+                data = jwt.decode(token, JWT_SECRET_KEY, algorithms=['HS256'])
+
+                current_user = {
+                    'username': data['username'],
+                    'role': data['role']
+                }
+
+                if role and current_user['role'] != role:
+                    return flask.jsonify({
+                        'status': status_codes['unauthorized'],
+                        'errors': f"Access denied for role '{current_user['role']}'",
+                        'results': None
+                    })
+
+                flask.g.current_user = current_user
+                return f(*args, **kwargs)
+
+            except jwt.ExpiredSignatureError:
+                return flask.jsonify({
+                    'status': status_codes['unauthorized'],
+                    'errors': 'Token has expired',
+                    'results': None
+                })
+            except jwt.InvalidTokenError as e:
+                return flask.jsonify({
+                    'status': status_codes['unauthorized'],
+                    'errors': f'Invalid token: {str(e)}',
+                    'results': None
+                })
+        return decorated
+    return decorator
 
 @app.route('/login', methods=['POST'])
 def login():
-    
-    data = request.get_json()
+    data = flask.request.get_json()
     username = data.get("username")
     password = data.get("password")
+    role = data.get("tag")  # ex: 'staff', 'student', 'instructor'
 
-    '''
-    print("\n--- Login Required ---")
-    username = input("Username: ")
-    password = input("Password: ")'''
-
-    con = connect_db();
+    con = connect_db()
     cursor = con.cursor()
-    cursor.execute("select tag from auth where username=%s and pw=%s", (username, password))
-
+    cursor.execute("SELECT tag FROM auth WHERE username=%s AND pw=%s", (username, password))
     user = cursor.fetchone()
-    print(user)
+    cursor.close()
+    con.close()
 
     if user is None:
-        print("No user assigned to this credentials\n")
-        return jsonify({"error":"No user assigned to this credentials"}), 401
-
-    payload = {
-        "username":username,
-        "role": user[0],
-        "exp": datetime.datetime.now() + datetime.timedelta(minutes=30)
-    }
-    
-    token = jwt.encode(payload, pkey, algorithm=enc)
-
-    print(token);
-
-    return jsonify({"token": token})
-
-
-def get_option():
-    option=-1
-
-    while (option not in [0,1,2,3,4,5,6]):
-        print('1 - List Departments')
-        print('2 - List Employees')
-        print('3 - Get Employee')
-        print('4 - Add Employee')
-        print('5 - Remove Employee')
-        print('6 - Move Employee to Department')
-        print('0 - Exit')
-
-        try:
-            option=int(input('Option: '))
-        except:
-            option=-1
-
-    return option
-
-def connect_db():
-    connection = psycopg2.connect(user = "usr",
-        password = "password",   # password should not be visible - will address this later on the course
-        host = "localhost",
-        port = "5432",
-        database = "empdb")
-    # parameters should be changeable - will address this later on the course
-
-    return connection
-
-@app.route('/lst_courses', methods=['GET'])
-def list_courses():
-
-    auth_head = request.headers.get('Authorization')
-
-    if not auth_head:
-            return jsonify({'error':'Missing authorization header'}), 401
+        return flask.jsonify({"error": "Invalid username or password"}), 401
 
     try:
-        token = auth_head
-        payload = jwt.decode(token, pkey, algorithms=[enc])
+        token = generate_token(username, role)
+        if token is None:
+            raise Exception("Token generation failed")
 
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
-        return jsonify({'error':'Invalid tokens'}), 401
+        return flask.jsonify({"token": token})
+    except Exception as e:
+        return flask.jsonify({"error": "Login failed due to server error"}), 500
 
-    #Body
-    print('--- List of Departments ---')
 
-    connection=connect_db()
-    cursor = connection.cursor()
-    cursor.execute('select * from course')
+@app.route("/students/top3", methods=["GET"])
+def top3_students():
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+        cursor.execute("""
+            SELECT s.auth_tag, s.name, ar.course_name, ar.grade
+            FROM student s
+            JOIN enrolment e ON s.auth_tag = e.student_auth_tag
+            JOIN academic_record ar ON ar.enrolment_id = e.id
+            ORDER BY ar.grade DESC
+            LIMIT 3;
+        """)
+        results = cursor.fetchall()
+        con.close()
+        return flask.jsonify([
+            {
+                "auth_tag": row[0],
+                "name": row[1],
+                "course_name": row[2],
+                "grade": row[3]
+            }
+            for row in results
+        ])
+    except Exception as e:
+        return flask.jsonify({"error": str(e)}), 500
 
-    courses = cursor.fetchall()
-
-    result = []
-    for row in courses:
-        result.append({
-            "name":row[0],
-            "code":row[1],
-            "prerequisites":row[2],
-            "edition":row[3],
-            "capacity":row[4],
-            "Instructor_auth_tag":row[5]
+@app.route("/dbproj/top_by_district/", methods=["GET"])
+@token_required(role='staff')
+def top_by_district():
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+        cursor.execute("""
+            SELECT s.auth_tag AS student_id,
+                   s.district,
+                   AVG(ar.grade) AS average_grade
+            FROM student s
+            JOIN enrolment e ON s.auth_tag = e.student_auth_tag
+            JOIN academic_record ar ON ar.enrolment_id = e.id
+            GROUP BY s.auth_tag, s.district
+            HAVING AVG(ar.grade) = (
+                SELECT MAX(avg_g) FROM (
+                    SELECT AVG(ar2.grade) AS avg_g
+                    FROM student s2
+                    JOIN enrolment e2 ON s2.auth_tag = e2.student_auth_tag
+                    JOIN academic_record ar2 ON ar2.enrolment_id = e2.id
+                    WHERE s2.district = s.district
+                    GROUP BY s2.auth_tag
+                ) sub
+            )
+            ORDER BY s.district;
+        """)
+        results = cursor.fetchall()
+        con.close()
+        return flask.jsonify({
+            "status": 200,
+            "errors": None,
+            "results": [
+                {
+                    "student_id": row[0],
+                    "district": row[1],
+                    "average_grade": float(row[2])
+                } for row in results
+            ]
         })
+    except Exception as e:
+        return flask.jsonify({"status": 500, "errors": str(e), "results": []})
 
-    '''
-    string = ["Cadeira", "Código", "PreRequesitos", "Edição", "Capacidade", "ID Instrutor"]
-    print("{:<25} {:<5} {:<20} {:<7} {:<7} {:<11}".format(*string))
 
-    for row in cursor:
+@app.route("/dbproj/report", methods=["GET"])
+@token_required(role='staff')
+def monthly_report():
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+        cursor.execute("""
+            SELECT DISTINCT ON (month)
+                TO_CHAR(ar.date_evaluated, 'YYYY-MM') AS month,
+                c.code AS course_edition_id,
+                c.name AS course_edition_name,
+                COUNT(*) FILTER (WHERE ar.grade >= 10) AS approved,
+                COUNT(*) AS evaluated
+            FROM academic_record ar
+            JOIN enrolment e ON ar.enrolment_id = e.id
+            JOIN course c ON c.name = ar.course_name
+            WHERE ar.date_evaluated >= CURRENT_DATE - INTERVAL '12 months'
+            GROUP BY month, c.code, c.name
+            ORDER BY month, approved DESC;
+        """)
+        results = cursor.fetchall()
+        con.close()
+        return flask.jsonify({
+            "status": 200,
+            "errors": None,
+            "results": [
+                {
+                    "month": row[0],
+                    "course_edition_id": row[1],
+                    "course_edition_name": row[2],
+                    "approved": row[3],
+                    "evaluated": row[4]
+                } for row in results
+            ]
+        })
+    except Exception as e:
+        return flask.jsonify({"status": 500, "errors": str(e), "results": []})
 
-        temp = [row[0],row[1],row[2], row[3],row[4],row[5]]
-        print("{:<25} {:<5} {:>20} {:<7} {:<7} {:<11}".format(*temp))
 
-    print('---------------------------\n')'''
-
-    return jsonify(result)
-
-def list_employees():
-    print('\n--- List of Employees ---')
-
-    ## To Be Completed
-
-    print('-------------------------\n')
-
-def get_employee():
-    print('\n--- Get Employee ---')
-
-    name=''
-    while (len(name)==0):
-        name=input('Name: ')
-
-    connection=connect_db()
-    cursor = connection.cursor()
-    cursor.execute("select emp_no, employees.name, job, date_contract, salary, commissions, departments.name \
-    from employees,departments \
-    where departments_dep_no = dep_no \
-    and employees.name='"+name+"'")
-
-    
-    # and employees.name='' or 1=1 --'
-
-    # cursor.execute("select emp_no, employees.name, job, date_contract, salary, commissions, departments.name \
-    # from employees,departments \
-    # where departments_dep_no = dep_no \
-    # and employees.name=%s",(name,))
-
-    if (cursor.rowcount==0):
-        print('Employee does not exist!')
-
-    for row in cursor:
-        print('No:',row[0])
-        print('Name:',row[1])
-        print('Job:',row[2])
-        print('Date Contract:',row[3])
-        print('Salary:',row[4])
-        print('Commissions:',row[5])
-        print('Department:',row[6])
-
-    print('--------------------\n')
-
-def add_employee():
-    print('\n--- Add Employee ---')
-
-    ## To Be Completed
-
-    print('--------------------\n')
-
-def remove_employee():
-    print('\n--- Remove Employee ---')
-
-    name=''
-    while (len(name)==0):
-        name=input('Name: ')
-
-    connection=connect_db()
-    cursor = connection.cursor()
-    cursor.execute("delete from employees \
-    where name=%s",(name,))
-
-    if (cursor.rowcount==0):
-        print('Employee does not exist!')
-    else:
-        print(cursor.rowcount, 'employee(s) deleted!')
-        connection.commit()
-
-    print('-----------------------\n')
-
-def move_emp_department():
-    print('\n--- Move Employee to Department ---')
-
-    ## To Be Completed
-
-    print('-----------------------------------\n')
+@app.route("/dbproj/delete_details/<int:student_id>", methods=["DELETE"])
+@token_required(role='staff')
+def delete_student(student_id):
+    try:
+        con = connect_db()
+        cursor = con.cursor()
+        cursor.execute("SELECT id FROM enrolment WHERE student_auth_tag = %s", (student_id,))
+        enrolments = cursor.fetchall()
+        for enrol_id in enrolments:
+            cursor.execute("DELETE FROM academic_record WHERE enrolment_id = %s", (enrol_id[0],))
+        cursor.execute("DELETE FROM enrolment WHERE student_auth_tag = %s", (student_id,))
+        cursor.execute("DELETE FROM financial_record WHERE student_auth_tag = %s", (student_id,))
+        cursor.execute("DELETE FROM student_extra_curricular WHERE student_auth_tag = %s", (student_id,))
+        cursor.execute("DELETE FROM student WHERE auth_tag = %s", (student_id,))
+        cursor.execute("DELETE FROM auth WHERE tag = %s", (student_id,))
+        con.commit()
+        con.close()
+        return flask.jsonify({"status": 200, "errors": None})
+    except Exception as e:
+        return flask.jsonify({"status": 500, "errors": str(e)})
 
 
 if __name__ == '__main__':
-
-    app.run(debug=True)
-    #login()
-
-    '''
-    function_list = (list_departments, list_employees, get_employee, add_employee, remove_employee, move_emp_department)
-    option = -1
-
-    while (option!=0):
-        option = get_option()
-        if (option != 0):
-            function_list[option-1]()'''
+    app.run(debug=True, port=8080)
