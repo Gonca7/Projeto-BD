@@ -196,7 +196,7 @@ def add_employee(usr_type):
             ''', (name, age, reg_year, a[0]["role"]))
         
         connection.commit()
-        return jsonify({'200':'Student added '}), 200
+        return jsonify({'Success':'Student added '}), 200
     
     elif(usr_type == 'instructor'):
         name = data.get("name")
@@ -208,9 +208,42 @@ def add_employee(usr_type):
             ''', (name, a[0]["role"]))
         
         connection.commit()
-        return jsonify({'200':'Instructor added '}), 200        
+        return jsonify({'Success':'Instructor added '}), 200        
 
     return jsonify({'error':'Bad Request'}), 400
+
+
+@app.route('/enroll_deg/<deg_id>', methods=['POST'])
+def enrollDeg(deg_id):
+    
+    a = checkAuth()
+    if(a[1] != 200 ):
+        return a
+    
+    #Body
+    connection=connect_db()
+    cursor = connection.cursor()
+    data = request.get_json()
+
+
+    cursor.execute('''select * from instructor where auth_tag = %s''', (a[0]["role"],))
+    isStaff = cursor.fetchall()
+    if(len(isStaff) <= 0):
+        return jsonify({'error':'Operation Denied'}), 500
+
+
+    tag = data.get('tag')
+    cursor.execute(
+    '''
+    insert into enrolment(is_finished, degree_id, student_auth_tag)
+    values(false, %s, %s);
+    ''', (deg_id, tag))
+
+    connection.commit()
+    return jsonify({'Success':'Student enrolled'}), 200        
+
+
+
 
 
 
