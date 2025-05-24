@@ -244,6 +244,33 @@ def enrollDeg(deg_id):
 
 
 
+@app.route('/enroll_act/<act_id>', methods=['POST'])
+def enrollAct(act_id):
+    
+    a = checkAuth()
+    if(a[1] != 200 ):
+        return a
+    
+    #Body
+    connection=connect_db()
+    cursor = connection.cursor()
+    data = request.get_json()
+
+
+    cursor.execute('''select * from student where auth_tag = %s''', (a[0]["role"],))
+    isStud = cursor.fetchall()
+    if(len(isStud) <= 0):
+        return jsonify({'error':'Operation Denied'}), 500
+
+
+    cursor.execute(
+    '''
+    insert into student_extra_curricular(student_auth_tag, extra_curricular_id)
+    values(%s, %s);
+    ''', (a[0]["role"], act_id))
+
+    connection.commit()
+    return jsonify({'Success':'You enrolled into an activity'}), 200
 
 
 
