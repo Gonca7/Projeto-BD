@@ -63,8 +63,8 @@ def get_option():
     return option
 
 def connect_db():
-    connection = psycopg2.connect(user = "usr",
-        password = "password",   # password should not be visible - will address this later on the course
+    connection = psycopg2.connect(user = "gonca7",
+        password = "postgres",   # password should not be visible - will address this later on the course
         host = "localhost",
         port = "5432",
         database = "empdb")
@@ -72,9 +72,8 @@ def connect_db():
 
     return connection
 
-@app.route('/lst_courses', methods=['GET'])
-def list_courses():
-
+def checkAuth():
+    
     auth_head = request.headers.get('Authorization')
 
     if not auth_head:
@@ -83,9 +82,19 @@ def list_courses():
     try:
         token = auth_head
         payload = jwt.decode(token, pkey, algorithms=[enc])
+        return payload, 200
 
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
         return jsonify({'error':'Invalid tokens'}), 401
+
+
+
+@app.route('/lst_courses', methods=['GET'])
+def list_courses():
+
+    a = checkAuth()
+    if(a[1] != 200 ):
+        return a
 
     #Body
     print('--- List of Departments ---')
@@ -163,12 +172,47 @@ def get_employee():
 
     print('--------------------\n')
 
-def add_employee():
-    print('\n--- Add Employee ---')
+@app.route('/register/<usr_type>', methods=['POST'])
+def add_employee(usr_type):
+    
+    a = checkAuth()
+    if(a[1] != 200 ):
+        return a
 
-    ## To Be Completed
+    #Body
+    connection=connect_db()
+    cursor = connection.cursor()
+    data = request.get_json()
 
-    print('--------------------\n')
+    if(usr_type == 'student'):
+        name = data.get("name")
+        age= data.get("age")
+        reg_year = data.get("reg_year")
+        
+        cursor.execute(
+            '''
+            INSERT INTO student(name, age, registration_year, auth_tag)
+            VALUES(%s, %s, %s, %s);
+            ''', (name, age, reg_year, a[0]["role"]))
+        
+        connection.commit()
+        return jsonify({'200':'Student added '}), 200
+    
+    elif(usr_type == 'instructor'):
+        name = data.get("name")
+        
+        cursor.execute(
+            '''
+            INSERT INTO instructor(name, auth_tag)
+            VALUES(%s, %s);
+            ''', (name, a[0]["role"]))
+        
+        connection.commit()
+        return jsonify({'200':'Instructor added '}), 200        
+
+    return jsonify({'error':'Bad Request'}), 400
+
+
 
 def remove_employee():
     print('\n--- Remove Employee ---')
