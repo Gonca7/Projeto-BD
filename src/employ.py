@@ -2,12 +2,12 @@ import flask
 from flask import Flask
 from functools import wraps
 import jwt
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import logging
 import psycopg2
 
 app = Flask(__name__)
-JWT_SECRET_KEY = "ultra-secured-key"
+pkey = "ultra-secured-key"
 enc = "HS256"
 logger = logging.getLogger()
 status_codes = {
@@ -16,6 +16,27 @@ status_codes = {
     'unauthorized': 401,
     'success': 200
 } 
+
+def get_option():
+
+    option =- 1
+
+    while (option not in [0, 1, 2, 3, 4, 5, 6]):
+        print('1 - List Departments')
+        print('2 - List Employees')
+        print('3 - Get Employee')
+        print('4 - Add Employee')
+        print('5 - Remove Employee')
+        print('6 - Move Employee to Department')
+        print('0 - Exit')
+
+        try:
+            option = int(input('Option: '))
+            
+        except:
+            option =- 1
+
+    return option
 
 def connect_db():
     return psycopg2.connect(
@@ -26,139 +47,165 @@ def connect_db():
         database="empdb"
     )
 
-def generate_token(username, role):
-    """Generate a JWT token with role-based permissions (student or instructor)"""
+def checkAuth():
+    
+    auth_head = flask.request.headers.get('Authorization')
+
+    if not auth_head:
+            return flask.jsonify({'error':'Missing authorization header'}), 401
+
     try:
-        if role not in ['student', 'instructor']:
-            raise ValueError('Invalid role specified. Must be student or instructor.')
+        token = auth_head
+        payload = jwt.decode(token, pkey, algorithms=[enc])
+        return payload, 200
 
-        payload = {
-            'exp': datetime.utcnow() + timedelta(hours=1),
-            'iat': datetime.utcnow(),
-            'username': username,
-            'role': role
-        }
-
-        token = jwt.encode(
-            payload,
-            JWT_SECRET_KEY,
-            algorithm='HS256'
-        )
-
-        return token if isinstance(token, str) else token.decode('utf-8')
-    except Exception as e:
-        logger.error(f'Error generating token: {str(e)}')
-        return None
-
-def token_required(role=None):
-    def decorator(f):
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            token = None
-            auth_header = flask.request.headers.get('Authorization')
-
-            logger.info(f'Received Authorization header: {auth_header}')
-
-            if auth_header:
-                try:
-                    token_parts = auth_header.split(" ")
-                    token = token_parts[1] if len(token_parts) > 1 else token_parts[0]
-                    logger.info(f'Extracted token: {token}')
-                except IndexError:
-                    logger.error('Invalid Authorization header format')
-                    return flask.jsonify({
-                        'status': status_codes['unauthorized'],
-                        'errors': 'Invalid token format. Use: Bearer <token>',
-                        'results': None
-                    })
-
-            if not token:
-                logger.error('No token provided')
-                return flask.jsonify({
-                    'status': status_codes['unauthorized'],
-                    'errors': 'Token is missing. Add Authorization: Bearer <token> header',
-                    'results': None
-                })
-
-            try:
-                logger.info('Attempting to decode token')
-                if isinstance(token, bytes):
-                    token = token.decode('utf-8')
-                data = jwt.decode(token, JWT_SECRET_KEY, algorithms=['HS256'])
-                logger.info(f'Token decoded successfully: {data}')
-
-                current_user = {
-                    'user_id': int(data['sub']),
-                    'username': data['username'],
-                    'role': data['role']
-                }
-
-                if role and current_user['role'] != role:
-                    logger.warning(f"Access denied. User role '{current_user['role']}' does not match required role '{role}'")
-                    return flask.jsonify({
-                        'status': status_codes['unauthorized'],
-                        'errors': f"Access denied for role '{current_user['role']}'",
-                        'results': None
-                    })
-
-                flask.g.current_user = current_user
-                return f(*args, **kwargs)
-
-            except jwt.ExpiredSignatureError:
-                logger.error('Token has expired')
-                return flask.jsonify({
-                    'status': status_codes['unauthorized'],
-                    'errors': 'Token has expired',
-                    'results': None
-                })
-            except jwt.InvalidTokenError as e:
-                logger.error(f'Invalid token error: {str(e)}')
-                return flask.jsonify({
-                    'status': status_codes['unauthorized'],
-                    'errors': f'Invalid token: {str(e)}',
-                    'results': None
-                })
-            except Exception as e:
-                logger.error(f'Unexpected error during token verification: {str(e)}')
-                return flask.jsonify({
-                    'status': status_codes['unauthorized'],
-                    'errors': f'Token verification failed: {str(e)}',
-                    'results': None
-                })
-        return decorated
-    return decorator
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
+        return flask.jsonify({'error':'Invalid tokens'}), 401
 
 @app.route('/login', methods=['POST'])
 def login():
+    
     data = flask.request.get_json()
     username = data.get("username")
     password = data.get("password")
-    tag = data.get("tag")
 
-    con = connect_db()
+    '''
+    print("\n--- Login Required ---")
+    username = input("Username: ")
+    password = input("Password: ")
+    '''
+
+    con = connect_db();
     cursor = con.cursor()
-    cursor.execute("SELECT tag FROM auth WHERE username=%s AND pw=%s", (username, password))
+    cursor.execute("select tag from auth where username=%s and pw=%s", (username, password))
+
     user = cursor.fetchone()
-    cursor.close()
-    con.close()
+    print(user)
 
     if user is None:
-        logger.warning("Login failed: invalid credentials")
-        return flask.jsonify({"error": "Invalid username or password"}), 401
+        print("No user assigned to this credentials\n")
+        return flask.jsonify({"error":"No user assigned to this credentials"}), 401
 
-    role = tag
+    payload = {
+        "username":username,
+        "role": user[0],
+        "exp": datetime.now() + timedelta(minutes=30)
+    }
+    
+    token = jwt.encode(payload, pkey, algorithm=enc)
 
-    try:
-        token = generate_token(username, role)
-        if token is None:
-            raise Exception("Token generation failed")
+    return flask.jsonify({"token": token})
 
-        return flask.jsonify({"token": token})
-    except Exception as e:
-        logger.error(f"Login error: {str(e)}")
-        return flask.jsonify({"error": "Login failed due to server error"}), 500
+@app.route('/enroll_course_edition/<course_edition_id>', methods=['POST'])
+def enroll_couse_edition(course_edition_id):
 
+    a = checkAuth()
+    if (a[1] != 200):
+        return a
+    
+    #Body
+    connection = connect_db()
+    cursor = connection.cursor()
+    data = flask.request.get_json()
 
+    cursor.execute("select ")
+    
+    return flask.jsonify("")
+
+@app.route('/submit_grades/<course_edition_id>', methods=['GET'])
+def submit_grades(course_edition_id):
+    return flask.jsonify()
+
+@app.route('/student_details/<student_id>', methods=['GET'])
+def list_student_details(student_id):
+
+    a = checkAuth()
+    if (a[1] != 200):
+        return a
+    
+    #Body
+    connection = connect_db()
+    cursor = connection.cursor()
+    
+    cursor.execute(
+        '''
+            SELECT
+            course.course_edition_id,
+            couse.course_name,
+            course.course_edition
+            academic_rate.grade
+            FROM
+            student
+            JOIN enrolment ON student.auth_tag = enrolment.student_auth_tag
+            JOIN academic_record ON academic_rate.enrolment_id = enrolment.id
+            JOIN course ON academic_rate.course_name = course.name
+            WHERE
+                student.auth_tag = :student_id
+            ORDER BY
+                course_edition_year DESC;
+        ''')
+    
+    # Fetch results
+    rows = cursor.fetchall()
+    
+    # Convert to list of dictionaries
+    results = [dict(row) for row in rows]
+
+    # Close connection
+    cursor.close()
+    connection.close()
+
+    return flask.jsonify(results)
+
+@app.route('/degree_details/<degree_id>', methods=['GET'])
+def list_degree_details(student_id):
+
+    a = checkAuth()
+    if (a[1] != 200):
+        return a
+    
+    #Body
+    connection = connect_db()
+    cursor = connection.cursor()
+    
+    cursor.execute(
+        '''
+            SELECT
+            c.code AS course_id,
+            c.name AS course_name,
+            c.edition AS course_edition_id,
+            c.capacity,
+            COUNT(DISTINCT e.student_auth_tag) AS enrolled_count,
+            COUNT(DISTINCT CASE WHEN ar.grade >= 10 THEN ar.enrolment_id END) AS approved_count,
+            c.instructor_auth_tag AS coordinator_id,
+            ARRAY_AGG(DISTINCT ci.instructor_auth_tag) AS instructors
+            FROM
+                course c
+            JOIN degree_course dc ON dc.course_code = c.code
+            LEFT JOIN course_instructor ci ON ci.course_code = c.code
+            LEFT JOIN class_time ct ON ct.course_code = c.code
+            LEFT JOIN enrolment e ON e.degree_id = dc.degree_id
+            LEFT JOIN academic_record ar ON ar.enrolment_id = e.id AND ar.course_name = c.name
+            WHERE
+                dc.degree_id = :degree_id
+            GROUP BY
+                c.code, c.name, c.edition, c.capacity, c.instructor_auth_tag
+            ORDER BY
+                course_edition_year DESC;
+        ''')
+    
+    # Fetch results
+    rows = cursor.fetchall()
+
+    
+    # Convert to list of dictionaries
+    results = [dict(row) for row in rows] 
+
+    # Close connection
+    cursor.close()
+    connection.close()
+
+    return flask.jsonify(results)
 
 
 if __name__ == '__main__':
