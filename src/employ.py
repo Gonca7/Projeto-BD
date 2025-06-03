@@ -75,7 +75,7 @@ def login():
     password = input("Password: ")
     '''
 
-    con = connect_db();
+    con = connect_db()
     cursor = con.cursor()
     cursor.execute("select tag from auth where username=%s and pw=%s", (username, password))
 
