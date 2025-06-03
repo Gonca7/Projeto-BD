@@ -18,7 +18,6 @@ status_codes = {
 } 
 
 def get_option():
-
     option =- 1
 
     while (option not in [0, 1, 2, 3, 4, 5, 6]):
@@ -130,10 +129,10 @@ def list_student_details(student_id):
     cursor.execute(
         '''
             SELECT
-            course.course_edition_id,
-            couse.course_name,
-            course.course_edition
-            academic_rate.grade
+            course.course_edition_id AS course_edition_id,
+            couse.course_name AS course_name,
+            course.course_edition AS course_edition,
+            academic_rate.grade AS grade
             FROM
             student
             JOIN enrolment ON student.auth_tag = enrolment.student_auth_tag
@@ -171,25 +170,25 @@ def list_degree_details(student_id):
     cursor.execute(
         '''
             SELECT
-            c.code AS course_id,
-            c.name AS course_name,
-            c.edition AS course_edition_id,
-            c.capacity,
-            COUNT(DISTINCT e.student_auth_tag) AS enrolled_count,
-            COUNT(DISTINCT CASE WHEN ar.grade >= 10 THEN ar.enrolment_id END) AS approved_count,
-            c.instructor_auth_tag AS coordinator_id,
-            ARRAY_AGG(DISTINCT ci.instructor_auth_tag) AS instructors
+            course.code AS course_id,
+            course.name AS couse_name,
+            course.edition AS course_edition,
+            course.capacity AS couse_capacity,
+            COUNT(DISTINCT enrolled_count.student_auth_tag) AS enrolled_count,
+            COUNT(DISTINCT CASE WHEN academic_rate.grade >= 10 THEN academic_rate.enrolment_id END) AS approved_count,
+            course.instructor_auth_tag AS coordinator_id,
+            ARRAY_AGG(DISTINCT course_instructor.instructor_auth_tag) AS instructors
             FROM
-                course c
-            JOIN degree_course dc ON dc.course_code = c.code
-            LEFT JOIN course_instructor ci ON ci.course_code = c.code
-            LEFT JOIN class_time ct ON ct.course_code = c.code
-            LEFT JOIN enrolment e ON e.degree_id = dc.degree_id
-            LEFT JOIN academic_record ar ON ar.enrolment_id = e.id AND ar.course_name = c.name
+                course
+            JOIN degree_course ON degree_course.course_code = course.code
+            LEFT JOIN course_instructor ON course_instructor.course_code = course.code
+            LEFT JOIN class_time ON class_time.course_code = course.code
+            LEFT JOIN enrolment ON enrollment.degree_id = degree_course.degree_id
+            LEFT JOIN academic_record ON academic_record.enrolment_id = enrollment.id AND academic_record.course_name = course.name
             WHERE
-                dc.degree_id = :degree_id
+                degree_couse.degree_id = :degree_id
             GROUP BY
-                c.code, c.name, c.edition, c.capacity, c.instructor_auth_tag
+                course.code, course.name, course.edition, course.capacity, course.instructor_auth_tag
             ORDER BY
                 course_edition_year DESC;
         ''')
@@ -197,7 +196,6 @@ def list_degree_details(student_id):
     # Fetch results
     rows = cursor.fetchall()
 
-    
     # Convert to list of dictionaries
     results = [dict(row) for row in rows] 
 
@@ -206,7 +204,6 @@ def list_degree_details(student_id):
     connection.close()
 
     return flask.jsonify(results)
-
 
 if __name__ == '__main__':
 
